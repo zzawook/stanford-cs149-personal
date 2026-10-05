@@ -2,6 +2,12 @@
 #define _TASKSYS_H
 
 #include "itasksys.h"
+#include <thread>
+#include <queue>
+#include <mutex>
+#include <latch>
+#include <atomic>
+#include <condition_variable>
 
 /*
  * TaskSystemSerial: This class is the student's implementation of a
@@ -34,6 +40,9 @@ class TaskSystemParallelSpawn: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+    private:
+        std::thread* threads;
+        int num_threads;
 };
 
 /*
@@ -42,6 +51,16 @@ class TaskSystemParallelSpawn: public ITaskSystem {
  * thread pool. See definition of ITaskSystem in itasksys.h for
  * documentation of the ITaskSystem interface.
  */
+
+class Task {
+    public:
+        IRunnable* runnable;
+        int i;
+        int num_total_tasks;
+        std::latch* latch;
+        Task(IRunnable* runnable, int i, int num_total_tasks, std::latch* latch);
+};
+
 class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
     public:
         TaskSystemParallelThreadPoolSpinning(int num_threads);
@@ -51,6 +70,13 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+        int num_threads;
+
+    private:
+        std::queue<Task> q;
+        std::mutex queue_mtx;
+        std::thread* thread_pool;
+        std::atomic<bool> cont{true};
 };
 
 /*
@@ -59,6 +85,7 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
  * a thread pool. See definition of ITaskSystem in
  * itasksys.h for documentation of the ITaskSystem interface.
  */
+
 class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
     public:
         TaskSystemParallelThreadPoolSleeping(int num_threads);
@@ -68,6 +95,13 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+        int num_threads;
+    private:
+       std::queue<Task> q;
+       std::mutex queue_mtx;
+       std::thread* thread_pool;
+       std::atomic<bool> cont{true};
+        std::condition_variable cv;
 };
 
 #endif
