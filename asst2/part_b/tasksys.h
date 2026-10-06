@@ -2,6 +2,14 @@
 #define _TASKSYS_H
 
 #include "itasksys.h"
+#include <thread>
+#include <queue>
+#include <mutex>
+#include <latch>
+#include <atomic>
+#include <condition_variable>
+#include <unordered_map>
+#include <functional>
 
 /*
  * TaskSystemSerial: This class is the student's implementation of a
@@ -34,6 +42,9 @@ class TaskSystemParallelSpawn: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+    private:
+        std::thread* threads;
+        int num_threads;
 };
 
 /*
@@ -42,6 +53,15 @@ class TaskSystemParallelSpawn: public ITaskSystem {
  * thread pool. See definition of ITaskSystem in itasksys.h for
  * documentation of the ITaskSystem interface.
  */
+class SpinTask {
+    public:
+        IRunnable* runnable;
+        int i;
+        int num_total_tasks;
+        std::latch* latch;
+        SpinTask(IRunnable* runnable, int i, int num_total_tasks, std::latch* latch);
+};
+
 class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
     public:
         TaskSystemParallelThreadPoolSpinning(int num_threads);
@@ -51,6 +71,37 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+        int num_threads;
+
+    private:
+        std::queue<SpinTask> q;
+        std::mutex queue_mtx;
+        std::thread* thread_pool;
+        std::atomic<bool> cont{true};
+        std::atomic<int> q_size;
+};
+class Task
+{
+public:
+    IRunnable *runnable;
+    int i;
+    int num_total_tasks;
+    std::atomic<int> *remaining;
+    int launch_id;
+    Task(IRunnable *runnable, int i, int num_total_tasks, int launch_id, std::atomic<int> *remaining);
+};
+
+class Launch
+{
+public:
+    std::vector<Task> tasks;
+    std::vector<TaskID> deps;
+    std::vector<TaskID> waiting;
+    std::atomic<int> *remaining{0};
+    std::function<void()> on_complete;
+    int launch_id;
+    Launch(std::vector<Task> tasks, int launch_id, std::vector<TaskID> deps, std::vector<TaskID> waiting, std::atomic<int> *remaining, std::function<void()> on_complete = []() {});
+    Launch() = default;
 };
 
 /*
@@ -68,6 +119,23 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+        int num_threads;
+
+    private:
+        std::atomic<bool> cont{true};
+        std::condition_variable cv;
+
+        std::thread *thread_pool;
+
+        std::queue<Task> q;
+        std::mutex queue_mtx;
+
+        std::unordered_map<int, Launch> current;
+        std::mutex current_mtx;
+        std::unordered_map<int, Launch> waiting;
+        std::mutex waiting_mtx;
+
+        std::atomic<int> prev_launch_id{0};
 };
 
 #endif
