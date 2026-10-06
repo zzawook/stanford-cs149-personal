@@ -77,6 +77,7 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         std::mutex queue_mtx;
         std::thread* thread_pool;
         std::atomic<bool> cont{true};
+        std::atomic<int> q_size;
 };
 
 /*

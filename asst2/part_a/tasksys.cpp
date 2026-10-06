@@ -118,17 +118,21 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
     for (int i = 0; i < num_threads; i++) {
         this->thread_pool[i] = std::thread([this] {
             while (this->cont) {
+                if (this->q_size == 0) {
+                    std::this_thread::yield();
+                    continue;
+                }
                 std::unique_lock<std::mutex> lock(this->queue_mtx);
                 if (!this->q.empty()) {
                     Task task = this->q.front();
                     this->q.pop();
+                    this->q_size.fetch_sub(1);
                     lock.unlock();
 
                     task.runnable->runTask(task.i, task.num_total_tasks);
                     task.latch->count_down();
                 } else {
                     lock.unlock();
-                
                 }
             } 
         });
@@ -146,13 +150,14 @@ TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
 void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
     std::latch latch(num_total_tasks);
 
+    std::unique_lock<std::mutex> lock(this->queue_mtx);
     for (int i = 0; i < num_total_tasks; i++) {
-        std::unique_lock<std::mutex> lock(this->queue_mtx);
         this->q.push(Task(runnable, i, num_total_tasks, &latch));
-        lock.unlock();
     }
+    this->q_size.store(this->q.size());
+    lock.unlock();
 
-    latch.wait();
+    while (!latch.try_wait()) {}
 
     return;
 }
@@ -179,10 +184,10 @@ const char* TaskSystemParallelThreadPoolSleeping::name() {
 }
 
 TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): ITaskSystem(num_threads) {
-    this->thread_pool = new std::thread[num_threads];
+    this->thread_pool = new std::thread[num_threads - 1];
     this->num_threads = num_threads;
 
-    for (int i = 0; i < num_threads; i++) {
+    for (int i = 0; i < num_threads - 1; i++) {
         this->thread_pool[i] = std::thread([this] {
             while (this->cont) {
                 std::unique_lock<std::mutex> lock(this->queue_mtx);
@@ -197,7 +202,6 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
                 
                 task.runnable->runTask(task.i, task.num_total_tasks);
                 task.latch->count_down();
-
             }
         });
     }
@@ -210,7 +214,7 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     }
     this->cv.notify_all();
 
-    for (int i = 0; i < this->num_threads; i++) {
+    for (int i = 0; i < this->num_threads - 1; i++) {
         this->thread_pool[i].join();
     }
 
@@ -225,7 +229,25 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
         this->q.push(Task(runnable, i, num_total_tasks, &latch));
     }
     lock.unlock();
-    this->cv.notify_one();
+    this->cv.notify_all();
+
+    while (true) {
+        std::unique_lock<std::mutex> lock(this->queue_mtx);
+        if (this->q.empty()) break;
+        this->cv.wait(lock,[this] { return !(this->cont) || !this->q.empty(); });
+
+        if (!(this->cont)) {
+            break;
+        }
+        Task task = this->q.front();
+        this->q.pop();
+        lock.unlock();
+                
+        task.runnable->runTask(task.i, task.num_total_tasks);
+        task.latch->count_down();
+
+    }
+
     latch.wait();
 
     return;
